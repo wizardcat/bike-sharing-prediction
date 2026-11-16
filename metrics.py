@@ -2,8 +2,7 @@
 #
 # The important rule here: every metric is computed from non-negative *count*
 # predictions obtained with the same inverse transform (``to_counts``). This
-# keeps validation and test numbers comparable; the earlier version scored
-# validation on raw log-space predictions and test on clipped counts.
+# keeps validation and test numbers comparable.
 
 from __future__ import annotations
 

@@ -249,8 +249,6 @@ free plan, Frankfurt region, health check on `/health`. The container reads `$PO
 the environment, which is how Render routes traffic — no port configuration needed in the
 dashboard.
 
-### Option A — Blueprint (recommended)
-
 1. Push this repository to GitHub (Render deploys from a Git repo, not from a local folder).
 2. Render Dashboard → **New +** → **Blueprint** → select the repository → **Apply**.
 3. Render creates the service, builds the root `Dockerfile`, and deploys it. The first
@@ -267,14 +265,6 @@ curl -s -X POST "https://bike-sharing-demand-prediction-wi18.onrender.com/predic
 # {"predictions":[725]}
 ```
 
-Replace the placeholder URL at the top of this README with the real one.
-
-### Option B — Manual web service
-
-If you prefer the dashboard over the Blueprint: **New +** → **Web Service** → connect the
-repo → Language **Docker** → health check path `/health` → instance type **Free** → Deploy.
-The service then builds the same `Dockerfile` with the repository root as build context.
-
 ### Notes and caveats
 
 * **Free instance cold starts:** the free plan spins down after ~15 minutes without traffic,
@@ -286,9 +276,6 @@ The service then builds the same `Dockerfile` with the repository root as build 
   `exec uvicorn predict:app --host 0.0.0.0 --port ${PORT}`; changing the hard-coded port
   would break Render routing.
 * **Auto-deploy:** by default Render redeploys on every push to the connected branch.
-* **Not verified against the live platform:** the image was built and exercised locally
-  (`/health` = 200, `/predict` returns the values above) and `render.yaml` was parsed as
-  valid YAML, but the first real Render deploy needs your account and repository.
 
 ---
 
