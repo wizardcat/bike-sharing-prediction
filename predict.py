@@ -38,9 +38,7 @@ app = FastAPI(title="Bike Sharing Demand Prediction API", version="1.0.0")
 # silently predicted as if it were a valid hour.
 # ---------------------------------------------------------------------------
 class HourInput(BaseModel):
-    season: int = Field(
-        ge=1, le=4, description="1=winter, 2=spring, 3=summer, 4=autumn"
-    )
+    season: int = Field(ge=1, le=4, description="1=spring, 2=summer, 3=fall, 4=winter")
     yr: int = Field(ge=0, le=1, description="0=2011, 1=2012")
     mnth: int = Field(ge=1, le=12, description="Month, 1-12")
     hr: int = Field(ge=0, le=23, description="Hour of the day, 0-23")

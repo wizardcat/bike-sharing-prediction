@@ -1,6 +1,6 @@
 {
   "experiment": "bike-sharing-demand-calendar-xgb",
-  "created_at": "2026-11-15T23:31:45.394316+02:00",
+  "created_at": "2026-11-16T16:18:33.463979+02:00",
   "primary_metric": "RMSLE = RMSE of log1p(counts), predictions clipped at 0",
   "dataset": {
     "path": "data/hour.csv",
@@ -67,5 +67,5 @@
     "scikit-learn": "1.9.1",
     "xgboost": "3.4.1"
   },
-  "git_sha": "3e6d612395e6ceb1b7af0c3f6d66ec06c9593d65"
+  "git_sha": "f37e10ec9a3d002a785957ab0108e45080ce07d7"
 }
