@@ -1,0 +1,21 @@
+# Render Blueprint for the bike-sharing demand prediction service.
+#
+# Deploy: Render Dashboard -> New + -> Blueprint -> select this repository.
+# Render builds the root ./Dockerfile with the repository root as the build
+# context (the defaults for a Docker service) and starts the container.
+#
+# Docs: https://render.com/docs/blueprint-spec, https://render.com/docs/docker
+
+services:
+  - type: web
+    name: bike-sharing-demand-prediction
+    runtime: docker
+    # Free instance: spins down after inactivity, so the first request after
+    # a quiet period waits for a cold start (~30-60 s).
+    plan: free
+    region: frankfurt
+    # Render routes traffic to the port in $PORT; Dockerfile binds to it.
+    healthCheckPath: /health
+    envVars:
+      - key: MODEL_PATH
+        value: models/bike_demand_model.bin
