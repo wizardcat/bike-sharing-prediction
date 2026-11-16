@@ -3,6 +3,7 @@
 # It produces models/bike_demand_model.bin, which predict.py loads for serving.
 
 import hashlib
+import json
 import os
 import pickle
 import platform
@@ -15,29 +16,31 @@ import sklearn
 import xgboost as xgb
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.tree import DecisionTreeRegressor
+
+from features import CATEGORICAL_FEATURES, make_features
+from metrics import (
+    log_mae_from_counts,
+    mae_counts,
+    rmse_counts,
+    rmsle_from_counts,
+    to_counts,
+)
 
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
+EXPERIMENT_NAME = "bike-sharing-demand-calendar-xgb"
 SEED = 42
 SEEDS = [0, 1, 2, 3, 4]
 DATA_PATH = "data/hour.csv"
 MODEL_PATH = "models/bike_demand_model.bin"
+METADATA_PATH = "models/bike_demand_model.metadata.json"
 
 TRAIN_END = pd.Timestamp("2012-06-30")
 VALID_END = pd.Timestamp("2012-09-30")
 
-CATEGORICAL_FEATURES = [
-    "season",
-    "yr",
-    "mnth",
-    "hr",
-    "holiday",
-    "weekday",
-    "workingday",
-]
+PRIMARY_METRIC = "RMSLE = RMSE of log1p(counts), predictions clipped at 0"
 
 np.random.seed(SEED)
 os.makedirs("models", exist_ok=True)
@@ -57,17 +60,32 @@ def dataset_hash(path):
         return hashlib.sha256(f.read()).hexdigest()
 
 
-def rmse(y_true, y_pred):
-    """RMSE; when both inputs are log1p(cnt) this is RMSLE."""
-    return float(np.sqrt(mean_squared_error(y_true, y_pred)))
+def score(y_true_counts, preds_log):
+    """Return (RMSLE, log-scale MAE) for log-space predictions.
+
+    Predictions are converted to non-negative counts first, so every model is
+    scored by exactly the same transform that the served model uses.
+    """
+    counts = to_counts(preds_log)
+    return (
+        rmsle_from_counts(y_true_counts, counts),
+        log_mae_from_counts(y_true_counts, counts),
+    )
 
 
-def make_features(frame, columns=None):
-    """One-hot encode the calendar features using a fixed column set."""
-    encoded = pd.get_dummies(frame[CATEGORICAL_FEATURES], dtype=float)
-    if columns is not None:
-        encoded = encoded.reindex(columns=columns, fill_value=0.0)
-    return encoded
+def add_result(name, scores):
+    """Store mean +- std of the metrics over the seeds of one model."""
+    rmsle = [s[0] for s in scores]
+    log_mae = [s[1] for s in scores]
+    results.append(
+        {
+            "model": name,
+            "rmsle_mean": float(np.mean(rmsle)),
+            "rmsle_std": float(np.std(rmsle)),
+            "log_mae_mean": float(np.mean(log_mae)),
+            "log_mae_std": float(np.std(log_mae)),
+        }
+    )
 
 
 def train_booster(dtrain, dvalid, params, max_rounds=500, early_stopping_rounds=50):
@@ -135,7 +153,6 @@ X_test = make_features(test, FEATURES)
 
 y_train = train["log_cnt"].to_numpy()
 y_valid = valid["log_cnt"].to_numpy()
-y_test = test["log_cnt"].to_numpy()
 
 print("features    :", len(FEATURES))
 print("train shape :", X_train.shape)
@@ -148,26 +165,16 @@ print()
 # ---------------------------------------------------------------------------
 results = []
 
+y_valid_counts = valid["cnt"].to_numpy()
+
 train_mean = float(y_train.mean())
 pred_global_mean = np.full(len(y_valid), train_mean)
-results.append(
-    {
-        "model": "baseline: global mean",
-        "rmsle_mean": rmse(y_valid, pred_global_mean),
-        "rmsle_std": 0.0,
-    }
-)
+add_result("baseline: global mean", [score(y_valid_counts, pred_global_mean)])
 
 profile = train.groupby(["weekday", "hr"])["log_cnt"].mean()
 valid_keys = list(zip(valid["weekday"], valid["hr"]))
 pred_profile = np.array([profile.get(key, train_mean) for key in valid_keys])
-results.append(
-    {
-        "model": "baseline: weekday x hour mean",
-        "rmsle_mean": rmse(y_valid, pred_profile),
-        "rmsle_std": 0.0,
-    }
-)
+add_result("baseline: weekday x hour mean", [score(y_valid_counts, pred_profile)])
 
 # ---------------------------------------------------------------------------
 # 5. Linear regression
@@ -175,13 +182,7 @@ results.append(
 lin_model = LinearRegression()
 lin_model.fit(X_train, y_train)
 pred_lin = lin_model.predict(X_valid)
-results.append(
-    {
-        "model": "linear regression",
-        "rmsle_mean": rmse(y_valid, pred_lin),
-        "rmsle_std": 0.0,
-    }
-)
+add_result("linear regression", [score(y_valid_counts, pred_lin)])
 
 # ---------------------------------------------------------------------------
 # 6. Decision tree
@@ -190,15 +191,9 @@ tree_scores = []
 for seed in SEEDS:
     tree = DecisionTreeRegressor(max_depth=8, random_state=seed)
     tree.fit(X_train, y_train)
-    tree_scores.append(rmse(y_valid, tree.predict(X_valid)))
+    tree_scores.append(score(y_valid_counts, tree.predict(X_valid)))
 
-results.append(
-    {
-        "model": "decision tree (max_depth=8)",
-        "rmsle_mean": float(np.mean(tree_scores)),
-        "rmsle_std": float(np.std(tree_scores)),
-    }
-)
+add_result("decision tree (max_depth=8)", tree_scores)
 
 # ---------------------------------------------------------------------------
 # 7. Random forest
@@ -213,15 +208,9 @@ for seed in SEEDS:
         n_jobs=-1,
     )
     forest.fit(X_train, y_train)
-    forest_scores.append(rmse(y_valid, forest.predict(X_valid)))
+    forest_scores.append(score(y_valid_counts, forest.predict(X_valid)))
 
-results.append(
-    {
-        "model": "random forest (100 trees)",
-        "rmsle_mean": float(np.mean(forest_scores)),
-        "rmsle_std": float(np.std(forest_scores)),
-    }
-)
+add_result("random forest (100 trees)", forest_scores)
 
 # ---------------------------------------------------------------------------
 # 8. XGBoost hyperparameter tuning
@@ -245,22 +234,24 @@ etas = [0.05, 0.1]
 max_depths = [4, 6, 8]
 
 tuning_rows = []
+tuning_scores = {}
 print("tuning XGBoost (this may take ~30-60 seconds)...")
 for eta in etas:
     for max_depth in max_depths:
-        scores = []
+        grid_scores = []
         best_iterations = []
         for seed in SEEDS:
             params = dict(base_params, eta=eta, max_depth=max_depth, seed=seed)
             booster = train_booster(dtrain, dvalid, params)
-            scores.append(rmse(y_valid, predict_booster(booster, dvalid)))
+            grid_scores.append(score(y_valid_counts, predict_booster(booster, dvalid)))
             best_iterations.append(booster.best_iteration + 1)
+        tuning_scores[(eta, max_depth)] = grid_scores
         tuning_rows.append(
             {
                 "eta": eta,
                 "max_depth": max_depth,
-                "rmsle_mean": float(np.mean(scores)),
-                "rmsle_std": float(np.std(scores)),
+                "rmsle_mean": float(np.mean([s[0] for s in grid_scores])),
+                "rmsle_std": float(np.std([s[0] for s in grid_scores])),
                 "rounds_mean": int(np.mean(best_iterations)),
             }
         )
@@ -279,12 +270,9 @@ best_params = dict(
 )
 best_rounds = int(best_row["rounds_mean"])
 
-results.append(
-    {
-        "model": "xgboost (tuned)",
-        "rmsle_mean": float(best_row["rmsle_mean"]),
-        "rmsle_std": float(best_row["rmsle_std"]),
-    }
+add_result(
+    "xgboost (tuned)",
+    tuning_scores[(float(best_row["eta"]), int(best_row["max_depth"]))],
 )
 
 print("chosen: eta =", best_params["eta"], "| max_depth =", best_params["max_depth"])
@@ -303,9 +291,23 @@ comparison["rmsle"] = (
     + " +- "
     + comparison["rmsle_std"].map("{:.4f}".format)
 )
+comparison["log_mae"] = (
+    comparison["log_mae_mean"].map("{:.4f}".format)
+    + " +- "
+    + comparison["log_mae_std"].map("{:.4f}".format)
+)
 print("validation RMSLE comparison:")
-print(comparison[["model", "rmsle"]].to_string(index=False))
+print(comparison[["model", "rmsle", "log_mae"]].to_string(index=False))
 print()
+
+# Validation metrics of the selected configuration, kept for the run metadata.
+best_validation = {
+    "RMSLE": float(best_row["rmsle_mean"]),
+    "RMSLE_std": float(best_row["rmsle_std"]),
+    "log_MAE": float(
+        comparison.loc[comparison["model"] == "xgboost (tuned)", "log_mae_mean"].iloc[0]
+    ),
+}
 
 # ---------------------------------------------------------------------------
 # 10. Final model on train + validation, evaluated once on test
@@ -321,14 +323,15 @@ final_model = xgb.train(
 )
 
 pred_test_log = final_model.predict(xgb.DMatrix(X_test))
-pred_test_cnt = np.clip(np.expm1(pred_test_log), 0, None)
+pred_test_counts = to_counts(pred_test_log)
+test_counts = test["cnt"].to_numpy()
 
 test_metrics = {
-    "RMSLE (log scale)": float(
-        np.sqrt(mean_squared_error(np.log1p(test["cnt"]), np.log1p(pred_test_cnt)))
-    ),
-    "RMSE (counts)": float(np.sqrt(mean_squared_error(test["cnt"], pred_test_cnt))),
-    "MAE (counts)": float(mean_absolute_error(test["cnt"], pred_test_cnt)),
+    "RMSLE": rmsle_from_counts(test_counts, pred_test_counts),
+    "log_MAE": log_mae_from_counts(test_counts, pred_test_counts),
+    "RMSE_counts": rmse_counts(test_counts, pred_test_counts),
+    "MAE_counts": mae_counts(test_counts, pred_test_counts),
+    "mean_actual_counts": float(np.mean(test_counts)),
 }
 print("test period metrics:")
 for metric, value in test_metrics.items():
@@ -336,11 +339,54 @@ for metric, value in test_metrics.items():
 print()
 
 # ---------------------------------------------------------------------------
-# 11. Save model artifact
+# 11. Save model artifact + run metadata
 # ---------------------------------------------------------------------------
+metadata = {
+    "experiment": EXPERIMENT_NAME,
+    "created_at": datetime.now().astimezone().isoformat(),
+    "primary_metric": PRIMARY_METRIC,
+    "dataset": {
+        "path": DATA_PATH,
+        "sha256": dataset_hash(DATA_PATH),
+        "rows": len(df),
+    },
+    "split": {
+        "strategy": "chronological",
+        "train": [str(train["dteday"].min().date()), str(TRAIN_END.date())],
+        "validation": [str(valid["dteday"].min().date()), str(VALID_END.date())],
+        "test": [str(test["dteday"].min().date()), str(test["dteday"].max().date())],
+        "rows": {"train": len(train), "valid": len(valid), "test": len(test)},
+    },
+    "seeds": {"global_seed": SEED, "seed_list": SEEDS},
+    "hyperparameters": {
+        "eta": float(best_params["eta"]),
+        "max_depth": int(best_params["max_depth"]),
+        "min_child_weight": int(base_params["min_child_weight"]),
+        "subsample": float(base_params["subsample"]),
+        "colsample_bytree": float(base_params["colsample_bytree"]),
+        "boosting_rounds": best_rounds,
+        "objective": base_params["objective"],
+    },
+    "metrics": {"validation": best_validation, "test": test_metrics},
+    "environment": {
+        "python": platform.python_version(),
+        "numpy": np.__version__,
+        "pandas": pd.__version__,
+        "scikit-learn": sklearn.__version__,
+        "xgboost": xgb.__version__,
+    },
+    "git_sha": git_sha(),
+}
+
 with open(MODEL_PATH, "wb") as f_out:
-    pickle.dump({"features": FEATURES, "model": final_model}, f_out)
+    pickle.dump(
+        {"features": FEATURES, "model": final_model, "metadata": metadata}, f_out
+    )
+
+with open(METADATA_PATH, "w", encoding="utf-8") as f_out:
+    json.dump(metadata, f_out, indent=2)
 
 print("saved model to:", MODEL_PATH)
+print("saved run metadata to:", METADATA_PATH)
 print("model size    :", os.path.getsize(MODEL_PATH), "bytes")
-print("training finished at:", datetime.now().astimezone().isoformat())
+print("training finished at:", metadata["created_at"])
