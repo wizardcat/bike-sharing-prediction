@@ -3,8 +3,7 @@
 An automated machine-learning service that estimates hourly bike-sharing rental demand
 from calendar information for the next day.
 
-**Live service:** deployed on Render — `https://<service-name>.onrender.com` (replace with the URL Render
-assigns after the first deploy; see [Deployment](#-deployment-render)).
+**Live service:** deployed on Render — `https://bike-sharing-demand-prediction-wi18.onrender.com` [Open Link](https://bike-sharing-demand-prediction-wi18.onrender.com)
 
 ---
 
@@ -259,10 +258,10 @@ dashboard.
 4. Verify the assigned URL (also shown in the dashboard):
 
 ```bash
-curl -s "https://<service-name>.onrender.com/health"
+curl -s "https://bike-sharing-demand-prediction-wi18.onrender.com/health"
 # {"status": "ok"}
 
-curl -s -X POST "https://<service-name>.onrender.com/predict" \
+curl -s -X POST "https://bike-sharing-demand-prediction-wi18.onrender.com/predict" \
   -H "Content-Type: application/json" \
   -d '{"hours":[{"season":4,"yr":1,"mnth":10,"hr":8,"holiday":0,"weekday":1,"workingday":1}]}'
 # {"predictions":[725]}
